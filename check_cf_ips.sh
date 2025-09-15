@@ -9,7 +9,7 @@ red_log() {
 }
 
 # Check github connect
-gh_connect=$(curl -fsSL "https://raw.githubusercontent.com/$repository/refs/heads/main/src/utils.sh" 2>/dev/null)
+gh_connect=$(curl -fsSL "https://raw.githubusercontent.com/$repository/refs/heads/main/cf_ips.sh" 2>/dev/null)
 if [[ -n "$gh_connect" ]]; then
     green_log "✅ Github connect OK!"
 else
