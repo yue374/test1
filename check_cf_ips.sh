@@ -1,5 +1,12 @@
 #!/bin/bash
-source src/utils.sh
+
+# Colored output logs
+green_log() {
+    echo -e "\e[32m$1\e[0m"
+}
+red_log() {
+    echo -e "\e[31m$1\e[0m"
+}
 
 # Check github connect
 gh_connect=$(curl -fsSL "https://raw.githubusercontent.com/$repository/refs/heads/main/src/utils.sh" 2>/dev/null)

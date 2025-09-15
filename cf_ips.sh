@@ -1,7 +1,14 @@
 #!/bin/bash
-source src/utils.sh
 
-mkdir /storage
+# Colored output logs
+green_log() {
+    echo -e "\e[32m$1\e[0m"
+}
+red_log() {
+    echo -e "\e[31m$1\e[0m"
+}
+
+mkdir storage
 
 # Count how many Profiles IDs input
 mapfile -t ids <<< "$profile_id"
@@ -13,12 +20,6 @@ for i in "${!ids[@]}"; do
 done
 echo "[+] Number Profiles ID: $num_profile_id"
 
-
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Ensure storage exists
-mkdir -p /storage
 
 # Split profile IDs into array
 mapfile -t ids <<< "$profile_id"
@@ -67,21 +68,21 @@ check_cf() {
   domain="$1"
   if out=$(curl -s --max-time 10 "https://$domain/cdn-cgi/trace" 2>/dev/null); then
     if grep -q "warp=off" <<< "$out" && grep -q "gateway=off" <<< "$out"; then
-      echo "$domain" >> /storage/cf_domain.txt
+      echo "$domain" >> storage/cf_domain.txt
     else
-      echo "$domain" >> /storage/not_cf_domain.txt
+      echo "$domain" >> storage/not_cf_domain.txt
     fi
   else
-    echo "$domain" >> /storage/not_cf_domain.txt
+    echo "$domain" >> storage/not_cf_domain.txt
   fi
 }
 
 export -f check_cf
-rm -f /storage/cf_domain.txt /storage/not_cf_domain.txt
+rm -f storage/cf_domain.txt storage/not_cf_domain.txt
 
 # Run checks in parallel (50 at a time)
 printf "%s\n" "$unique_domains" | xargs -n1 -P50 bash -c 'check_cf "$@"' _
 
 echo "[+] Done. Results saved:"
-echo "  - /storage/cf_domain.txt"
-echo "  - /storage/not_cf_domain.txt"
+echo "  - storage/cf_domain.txt"
+echo "  - storage/not_cf_domain.txt"

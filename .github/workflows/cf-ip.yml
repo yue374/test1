@@ -19,13 +19,13 @@ jobs:
         uses: actions/checkout@v5.0.0
 
       - name: Checking
-        run: bash src/check_cf_ips.sh
+        run: bash check_cf_ips.sh
         env:
           nextdns_api: ${{ secrets.NEXTDNS_API }}
           profile_id: ${{ secrets.PROFILE_ID }}
           repository: ${{ github.repository }}
       - name: Rewritting
-        run: bash src/cf_ips.sh
+        run: bash cf_ips.sh
         env:
           nextdns_api: ${{ secrets.NEXTDNS_API }}
           profile_id: ${{ secrets.PROFILE_ID }}
@@ -36,7 +36,7 @@ jobs:
         uses: ncipollo/release-action@v1.14.0
         with:
           artifacts: |
-            /storage/*.txt
+            storage/*.txt
           name: Test
           tag: all
           allowUpdates: true
