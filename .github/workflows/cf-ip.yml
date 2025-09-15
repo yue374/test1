@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@main
+        uses: actions/checkout@v5.0.0
 
       - name: Checking
         run: bash src/check_cf_ips.sh
