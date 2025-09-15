@@ -32,11 +32,11 @@ jobs:
           repository: ${{ github.repository }}
           exclude_domain: ${{ vars.EXCLUDE_DOMAIN }}
           include_domain: ${{ vars.INCLUDE_DOMAIN }}
-    - name: Release
-      uses: ncipollo/release-action@v1.14.0
-      with:
-        artifacts: |
-          /storage/*.txt
-        name: Test
-        tag: all
-        allowUpdates: true
+      - name: Release
+        uses: ncipollo/release-action@v1.14.0
+        with:
+          artifacts: |
+            /storage/*.txt
+          name: Test
+          tag: all
+          allowUpdates: true
