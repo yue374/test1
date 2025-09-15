@@ -14,65 +14,74 @@ done
 echo "[+] Number Profiles ID: $num_profile_id"
 
 
-# Read profile IDs into array
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Ensure storage exists
+mkdir -p /storage
+
+# Split profile IDs into array
 mapfile -t ids <<< "$profile_id"
 num_profile_id=${#ids[@]}
+export num_profile_id
+for i in "${!ids[@]}"; do
+  n=$((i + 1))
+  export "profile_id$n=${ids[$i]}"
+done
 echo "[+] Number Profiles ID: $num_profile_id"
 
-# Temporary file to store all domains
-tmpfile=$(mktemp)
+# Collect all domains
+all_domains=()
 
-# Fetch domains in parallel (50 at a time)
-printf "%s\n" "${ids[@]}" | xargs -P50 -I{} bash -c '
-  curl -s -X GET "https://api.nextdns.io/profiles/{}/analytics/domains?status=default%2Callowed&from=-30d&limit=1000" \
-    -H "X-Api-Key: $nextdns_api" \
-  | jq -r ".data[].domain"
-' >> "$tmpfile"
+for pid in "${ids[@]}"; do
+  echo "[*] Fetching domains for profile: $pid"
+  json=$(curl -s -X GET \
+    "https://api.nextdns.io/profiles/$pid/analytics/domains?status=default%2Callowed&from=-30d&limit=1000" \
+    -H "X-Api-Key: $nextdns_api")
 
-# Merge domains & remove duplicates
-mapfile -t all_domains < <(sort -u "$tmpfile")
-rm -f "$tmpfile"
+  # Extract domain list
+  domains=$(jq -r '.data[].domain' <<< "$json" || true)
+  all_domains+=($domains)
+done
 
-# Convert exclude/include domains into arrays
-mapfile -t excludes <<< "$exclude_domain"
-mapfile -t includes <<< "$include_domain"
+# Deduplicate
+unique_domains=$(printf "%s\n" "${all_domains[@]}" | sort -u)
 
-# Remove excluded domains and their subdomains
-filtered_domains=()
-for domain in "${all_domains[@]}"; do
-  skip=false
-  for ex in "${excludes[@]}"; do
-    if [[ "$domain" == *".$ex" || "$domain" == "$ex" ]]; then
-      skip=true
-      break
+# Apply exclude filter (remove domain + subdomains)
+if [[ -n "${exclude_domain:-}" ]]; then
+  while IFS= read -r ex; do
+    [[ -z "$ex" ]] && continue
+    unique_domains=$(grep -v -E "(^|\\.)${ex//./\\.}$" <<< "$unique_domains" || true)
+  done <<< "$exclude_domain"
+fi
+
+# Apply include filter (ensure included domains exist)
+if [[ -n "${include_domain:-}" ]]; then
+  unique_domains=$(printf "%s\n%s\n" "$unique_domains" "$include_domain" | sort -u)
+fi
+
+echo "[+] Total domains after filtering: $(wc -l <<< "$unique_domains")"
+
+# Cloudflare check function
+check_cf() {
+  domain="$1"
+  if out=$(curl -s --max-time 10 "https://$domain/cdn-cgi/trace" 2>/dev/null); then
+    if grep -q "warp=off" <<< "$out" && grep -q "gateway=off" <<< "$out"; then
+      echo "$domain" >> /storage/cf_domain.txt
+    else
+      echo "$domain" >> /storage/not_cf_domain.txt
     fi
-  done
-  $skip || filtered_domains+=("$domain")
-done
-
-# Add includes (ensure uniqueness)
-for inc in "${includes[@]}"; do
-  if [[ ! " ${filtered_domains[*]} " =~ " $inc " ]]; then
-    filtered_domains+=("$inc")
-  fi
-done
-
-# Prepare output files
-cf_file="/storage/cf_domain.txt"
-not_cf_file="/storage/not_cf_domain.txt"
-: > "$cf_file"
-: > "$not_cf_file"
-
-# Check Cloudflare status in parallel (50 at once)
-printf "%s\n" "${filtered_domains[@]}" | xargs -P50 -I{} bash -c '
-  resp=$(curl -s --max-time 10 "https://{}/cdn-cgi/trace" || true)
-  if [[ "$resp" == *"warp=off"* && "$resp" == *"gateway=off"* ]]; then
-    echo "{}" >> "'"$cf_file"'"
   else
-    echo "{}" >> "'"$not_cf_file"'"
+    echo "$domain" >> /storage/not_cf_domain.txt
   fi
-'
+}
 
-echo "[+] Done. Results:"
-echo "  Cloudflare domains: $cf_file"
-echo "  Non-Cloudflare domains: $not_cf_file"
+export -f check_cf
+rm -f /storage/cf_domain.txt /storage/not_cf_domain.txt
+
+# Run checks in parallel (50 at a time)
+printf "%s\n" "$unique_domains" | xargs -n1 -P50 bash -c 'check_cf "$@"' _
+
+echo "[+] Done. Results saved:"
+echo "  - /storage/cf_domain.txt"
+echo "  - /storage/not_cf_domain.txt"
