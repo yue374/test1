@@ -1,5 +1,4 @@
 #!/bin/bash
-
 mkdir -p ./storage
 
 # Colored output logs
@@ -14,10 +13,12 @@ red_log() {
 mapfile -t ids <<< "$profile_id"
 num_profile_id=${#ids[@]}
 export num_profile_id
+
 for i in "${!ids[@]}"; do
   n=$((i + 1))
   export "profile_id$n=${ids[$i]}"
 done
+
 echo "[+] Number Profiles ID: $num_profile_id"
 
 # Initialize arrays for domains
@@ -28,17 +29,23 @@ declare -a final_domains
 fetch_domains_from_profile() {
     local profile="$1"
     local response
+    
     echo "[*] Fetching domains from profile: $profile"
+    
     response=$(curl -s -X GET "https://api.nextdns.io/profiles/${profile}/analytics/domains?status=default%2Callowed&from=-30d&limit=1000" \
         -H "X-Api-Key: $nextdns_api")
+    
+    # Remove null bytes and extract domains
     echo "$response" \
+        | tr -d '\000' \
         | grep -o '"domain":"[^"]*"' \
-        | sed 's/"domain":"\([^"]*\)"/\1/' \
-        | tr -d '\000'
+        | sed 's/"domain":"\([^"]*\)"/\1/'
 }
 
+# Fetch domains from all profiles
 for profile in "${ids[@]}"; do
     domains=$(fetch_domains_from_profile "$profile")
+    
     while IFS= read -r domain; do
         if [[ -n "$domain" ]]; then
             all_domains_map["$domain"]=1
@@ -55,11 +62,13 @@ mapfile -t include_list <<< "$include_domain"
 # Function to check if a domain should be excluded
 should_exclude() {
     local domain="$1"
+    
     for exclude in "${exclude_list[@]}"; do
         exclude=$(echo "$exclude" | tr -d '\r' | xargs)  # Clean whitespace
         if [[ -z "$exclude" ]]; then
             continue
         fi
+        
         if [[ "$domain" == "$exclude" ]] || [[ "$domain" == *".$exclude" ]]; then
             return 0
         fi
@@ -80,6 +89,7 @@ declare -A final_domains_map
 for domain in "${final_domains[@]}"; do
     final_domains_map["$domain"]=1
 done
+
 for include in "${include_list[@]}"; do
     include=$(echo "$include" | tr -d '\r' | xargs)  # Clean whitespace
     if [[ -n "$include" ]] && [[ -z "${final_domains_map[$include]}" ]]; then
@@ -87,8 +97,10 @@ for include in "${include_list[@]}"; do
         final_domains_map["$include"]=1
     fi
 done
+
 echo "[+] Domains after filtering: ${#final_domains[@]}"
 
+# Clear the output file
 > ./storage/cf_domain.txt
 
 # Check if domain uses Cloudflare
@@ -96,25 +108,43 @@ check_cloudflare() {
     local domain="$1"
     local response
     local timeout=10
+    
+    # Fetch the response and remove null bytes
     response=$(curl -s --connect-timeout "$timeout" --max-time "$timeout" \
-        "https://${domain}/cdn-cgi/trace" 2>/dev/null)
-    if echo "$response" | grep -q "warp=off" 2>/dev/null; then
-        echo "$domain" >> ./storage/cf_domain.txt
+        "https://${domain}/cdn-cgi/trace" 2>/dev/null | tr -d '\000')
+    
+    # Check for warp=off in the cleaned response
+    if [[ -n "$response" ]] && echo "$response" | grep -q "warp=off" 2>/dev/null; then
+        # Use printf to ensure clean output without null bytes
+        printf "%s\n" "$domain" >> ./storage/cf_domain.txt
     fi
 }
+
 export -f check_cloudflare
 
 # Process domains in parallel
 max_parallel=50
-current_jobs=0
+
 for domain in "${final_domains[@]}"; do
     while [[ $(jobs -r | wc -l) -ge $max_parallel ]]; do
         sleep 0.1
     done
+    
     check_cloudflare "$domain" &
 done
+
+# Wait for all jobs to complete
 wait
-cf_count=$(wc -l < ./storage/cf_domain.txt 2>/dev/null || echo 0)
+
+# Count results safely by removing any null bytes from the file first
+if [[ -f ./storage/cf_domain.txt ]]; then
+    # Clean the file from any null bytes and count lines
+    tr -d '\000' < ./storage/cf_domain.txt > ./storage/cf_domain_clean.txt
+    mv ./storage/cf_domain_clean.txt ./storage/cf_domain.txt
+    cf_count=$(wc -l < ./storage/cf_domain.txt 2>/dev/null || echo 0)
+else
+    cf_count=0
+fi
 
 green_log "================================================"
 green_log "Domains with Cloudflare CDN: $cf_count"
