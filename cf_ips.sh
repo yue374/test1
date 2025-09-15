@@ -31,7 +31,10 @@ fetch_domains_from_profile() {
     echo "[*] Fetching domains from profile: $profile"
     response=$(curl -s -X GET "https://api.nextdns.io/profiles/${profile}/analytics/domains?status=default%2Callowed&from=-30d&limit=1000" \
         -H "X-Api-Key: $nextdns_api")
-    echo "$response" | grep -o '"domain":"[^"]*"' | sed 's/"domain":"\([^"]*\)"/\1/'
+    echo "$response" \
+        | grep -o '"domain":"[^"]*"' \
+        | sed 's/"domain":"\([^"]*\)"/\1/' \
+        | tr -d '\000'
 }
 
 for profile in "${ids[@]}"; do
@@ -96,7 +99,7 @@ check_cloudflare() {
     response=$(curl -s --connect-timeout "$timeout" --max-time "$timeout" \
         "https://${domain}/cdn-cgi/trace" 2>/dev/null)
     if echo "$response" | grep -q "warp=off" 2>/dev/null; then
-        echo "$domain" | tr -d '\000' >> ./storage/cf_domain.txt
+        echo "$domain" >> ./storage/cf_domain.txt
     fi
 }
 export -f check_cloudflare
@@ -111,7 +114,7 @@ for domain in "${final_domains[@]}"; do
     check_cloudflare "$domain" &
 done
 wait
-cf_count=$(tr -d '\000' < ./storage/cf_domain.txt | wc -l)
+cf_count=$(wc -l < ./storage/cf_domain.txt 2>/dev/null || echo 0)
 
 green_log "================================================"
 green_log "Domains with Cloudflare CDN: $cf_count"
