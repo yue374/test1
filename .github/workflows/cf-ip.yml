@@ -21,6 +21,8 @@ jobs:
       - name: Checking
         run: bash src/check_cf_ips.sh
         env:
+          nextdns_api: ${{ secrets.NEXTDNS_API }}
+          profile_id: ${{ secrets.PROFILE_ID }}
           repository: ${{ github.repository }}
 
       - name: Rewritting
