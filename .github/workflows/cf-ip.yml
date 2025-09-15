@@ -26,6 +26,6 @@ jobs:
       - name: Rewritting
         run: bash src/cf_ips.sh
         env:
-          nextdns_api: ${{ secrets.nextdns_api }}
-          profile_id: ${{ secrets.profile_id }}
+          nextdns_api: ${{ secrets.NEXTDNS_API }}
+          profile_id: ${{ secrets.PROFILE_ID }}
           repository: ${{ github.repository }}
