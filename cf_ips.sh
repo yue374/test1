@@ -34,7 +34,6 @@ fetch_domains_from_profile() {
     echo "$response" | grep -o '"domain":"[^"]*"' | sed 's/"domain":"\([^"]*\)"/\1/'
 }
 
-echo "[+] Fetching domains from all profiles..."
 for profile in "${ids[@]}"; do
     domains=$(fetch_domains_from_profile "$profile")
     while IFS= read -r domain; do
@@ -67,7 +66,6 @@ should_exclude() {
 }
 
 # Filter domains based on exclude list
-echo "[+] Filtering domains based on exclude list..."
 for domain in "${!all_domains_map[@]}"; do
     if ! should_exclude "$domain"; then
         final_domains+=("$domain")
@@ -75,7 +73,6 @@ for domain in "${!all_domains_map[@]}"; do
 done
 
 # Add domains from include list
-echo "[+] Adding domains from include list..."
 declare -A final_domains_map
 for domain in "${final_domains[@]}"; do
     final_domains_map["$domain"]=1
@@ -98,15 +95,13 @@ check_cloudflare() {
     local timeout=10
     response=$(curl -s --connect-timeout "$timeout" --max-time "$timeout" \
         "https://${domain}/cdn-cgi/trace" 2>/dev/null)
-    if echo "$response" | grep -q "warp=off" && echo "$response" | grep -q "gateway=off"; then
+    if echo "$response" | grep -q "warp=off" 2>/dev/null; then
         echo "$domain" >> ./storage/cf_domain.txt
-        echo "[CF] $domain"
     fi
 }
 export -f check_cloudflare
 
-# Process domains in parallel (50 at a time)
-echo "[+] Checking domains for Cloudflare CDN..."
+# Process domains in parallel
 max_parallel=50
 current_jobs=0
 for domain in "${final_domains[@]}"; do
