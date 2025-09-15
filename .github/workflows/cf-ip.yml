@@ -1,0 +1,27 @@
+name: Cloudflare IPs rewrite
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+jobs:
+  Cloudflare_IPs_rewrite:
+    name: Cloudflare IPs rewrite
+    permissions: write-all
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@lastest
+      
+      - name: Rewritting
+        run: bash src/cf_ips.sh
+        env:
+          profile_id: ${{ vars.profile_id }}
+          cf_domains: ${{ vars.cf_domains }}
+          not_cf_domains: ${{ vars.not_cf_domains }}
+      
+
+          
+        
