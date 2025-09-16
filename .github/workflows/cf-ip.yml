@@ -1,4 +1,4 @@
-name: 1. Cloudflare IPs Rewrite
+name: 1. Cloudflare IP Rewrite
 
 on:
   schedule:
@@ -6,8 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  Cloudflare_IPs_Rewrite:
-    name: Cloudflare IPs Rewrite
+  Cloudflare_IP_Rewrite:
+    name: Cloudflare IP Rewrite
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
