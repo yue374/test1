@@ -1,6 +1,4 @@
 #!/bin/bash
-mkdir -p ./storage
-
 # Colored output logs
 green_log() {
     echo -e "\e[32m$1\e[0m"

@@ -1,0 +1,25 @@
+name: 2. Remove Rewrite
+
+on:
+  workflow_dispatch:
+
+jobs:
+  Remove_Rewrite:
+    name: Remove Rewrite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5.0.0
+
+      - name: Checking
+        run: bash check_cf_ips.sh
+        env:
+          nextdns_api: ${{ secrets.NEXTDNS_API }}
+          profile_id: ${{ secrets.PROFILE_ID }}
+          repository: ${{ github.repository }}
+
+      - name: Removing
+        run: bash cf_rm.sh
+        env:
+          nextdns_api: ${{ secrets.NEXTDNS_API }}
+          profile_id: ${{ secrets.PROFILE_ID }}
