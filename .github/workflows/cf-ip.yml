@@ -12,8 +12,6 @@ concurrency:
 jobs:
   Cloudflare_IPs_rewrite:
     name: Cloudflare IPs Rewrite
-    permissions:
-      actions: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -34,12 +32,3 @@ jobs:
           repository: ${{ github.repository }}
           exclude_domain: ${{ vars.EXCLUDE_DOMAIN }}
           include_domain: ${{ vars.INCLUDE_DOMAIN }}
-
-      - name: Release
-        uses: ncipollo/release-action@v1.14.0
-        with:
-          artifacts: |
-            storage/*.txt
-          name: Test
-          tag: all
-          allowUpdates: true

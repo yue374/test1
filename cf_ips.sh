@@ -153,14 +153,6 @@ green_log "================================================"
 green_log "Domains with Cloudflare CDN: $cf_count"
 green_log "================================================"
 
-# ============================================
-# NEW FEATURE: Manage NextDNS Rewrites
-# ============================================
-
-yellow_log "================================================"
-yellow_log "Starting NextDNS Rewrites Management"
-yellow_log "================================================"
-
 # Store fastest IPs and past CF domains for each profile
 declare -A profile_fastest_ips
 declare -A profile_past_domains
@@ -211,25 +203,12 @@ extract_domains_with_ip() {
     local target_ip="$2"
     local domains=""
     
-    # Parse JSON to find all domains with the target IP (excluding nextdns.cloudflare.fastest.ip.com)
-    echo "$json" | python3 -c "
-import json
-import sys
 
-try:
-    data = json.load(sys.stdin)
-    for item in data.get('data', []):
-        if (item.get('content') == '$target_ip' and 
-            item.get('name') != 'nextdns.cloudflare.fastest.ip.com'):
-            print(f\"{item['name']}:{item['id']}\")
-except:
-    pass
-" 2>/dev/null || {
     # Fallback to grep/sed if Python is not available
     echo "$json" | tr ',' '\n' | grep -B1 "\"content\":\"$target_ip\"" | \
         grep '"name":"' | grep -v 'nextdns.cloudflare.fastest.ip.com' | \
         sed 's/.*"name":"\([^"]*\)".*/\1/'
-}
+
 }
 
 # Fetch rewrites for all profiles and extract fastest IPs and past CF domains
@@ -255,7 +234,7 @@ for profile in "${ids[@]}"; do
     profile_fastest_ips["$profile"]="$fastest_ip"
     green_log "[+] Profile $profile - Fastest IP: $fastest_ip"
     
-    # Extract domains with the fastest IP (past CF domains)
+    # Extract past CF domains
     while IFS=: read -r domain domain_id; do
         if [[ -n "$domain" ]]; then
             profile_past_domains["${profile}:${domain}"]="1"
@@ -274,8 +253,6 @@ if [[ -f ./storage/cf_domain.txt ]]; then
     done < ./storage/cf_domain.txt
 fi
 
-echo "[+] Current CF domains: ${#current_cf_domains[@]}"
-
 # Function to delete a rewrite
 delete_rewrite() {
     local profile="$1"
@@ -292,7 +269,6 @@ delete_rewrite() {
         http_code=$(echo "$response" | tail -n1)
         
         if [[ "$http_code" == "200" ]] || [[ "$http_code" == "204" ]]; then
-            green_log "[+] Deleted: $domain_name from profile $profile"
             sleep 0.5  # 500ms delay
             return 0
         fi
@@ -315,7 +291,6 @@ add_rewrite() {
     local ip="$3"
     local retry_count=0
     local max_retries=2
-    
     local json_payload="{\"name\":\"${domain}\",\"content\":\"${ip}\"}"
     
     while [[ $retry_count -lt $max_retries ]]; do
@@ -328,8 +303,7 @@ add_rewrite() {
         http_code=$(echo "$response" | tail -n1)
         
         if [[ "$http_code" == "200" ]] || [[ "$http_code" == "201" ]]; then
-            green_log "[+] Added: $domain to profile $profile with IP $ip"
-            sleep 0.5  # 500ms delay
+            sleep 0.5
             return 0
         fi
         
@@ -344,7 +318,7 @@ add_rewrite() {
     return 1
 }
 
-# Process deletions (domains in past but not in current)
+# Process deletions domains
 yellow_log "================================================"
 yellow_log "Processing domain deletions..."
 yellow_log "================================================"
@@ -383,7 +357,7 @@ else
     echo "[*] No domains to delete"
 fi
 
-# Process additions (domains in current but not in past)
+# Process additions domains
 yellow_log "================================================"
 yellow_log "Processing domain additions..."
 yellow_log "================================================"
@@ -391,14 +365,12 @@ yellow_log "================================================"
 declare -a domains_to_add
 for domain in "${!current_cf_domains[@]}"; do
     needs_add=1
-    
     for profile in "${ids[@]}"; do
         if [[ -n "${profile_past_domains[${profile}:${domain}]}" ]]; then
             needs_add=0
             break
         fi
     done
-    
     if [[ $needs_add -eq 1 ]]; then
         domains_to_add+=("$domain")
     fi
@@ -406,7 +378,6 @@ done
 
 if [[ ${#domains_to_add[@]} -gt 0 ]]; then
     echo "[*] Domains to add: ${#domains_to_add[@]}"
-    
     for domain in "${domains_to_add[@]}"; do
         for profile in "${ids[@]}"; do
             if [[ -n "${profile_fastest_ips[$profile]}" ]]; then
@@ -423,5 +394,5 @@ else
 fi
 
 green_log "================================================"
-green_log "NextDNS Rewrites Management Complete!"
+green_log "NextDNS Rewrites Complete!"
 green_log "================================================"
