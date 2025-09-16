@@ -168,8 +168,8 @@ fetch_rewrites_from_profile() {
         
         retry_count=$((retry_count + 1))
         if [[ $retry_count -lt $max_retries ]]; then
-            red_log "[!] Failed to fetch rewrites for profile $profile. Retrying in 2 minutes..."
-            sleep 120
+            red_log "[!] Failed to fetch rewrites for profile $profile. Retrying in 30 seconds..."
+            sleep 30
         fi
     done
     
@@ -269,8 +269,8 @@ delete_rewrite() {
         
         retry_count=$((retry_count + 1))
         if [[ $retry_count -lt $max_retries ]]; then
-            red_log "[!] Failed to delete $domain_name. Waiting 2 minutes before retry..."
-            sleep 120
+            red_log "[!] Failed to delete $domain_name. Waiting 30 seconds before retry..."
+            sleep 30
         fi
     done
     
