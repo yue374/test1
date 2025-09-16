@@ -12,7 +12,8 @@ concurrency:
 jobs:
   Cloudflare_IPs_rewrite:
     name: Cloudflare IPs Rewrite
-    permissions: write-all
+    permissions:
+      actions: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
