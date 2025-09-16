@@ -50,26 +50,36 @@ except:
 " 2>/dev/null
 }
 
-# Function: delete rewrite
+# Function: delete rewrite with retries
 delete_rewrite() {
     local profile="$1"
     local domain_id="$2"
     local domain_name="$3"
+    local max_retries=5
+    local attempt=1
 
-    response=$(curl -s -X DELETE "https://api.nextdns.io/profiles/${profile}/rewrites/${domain_id}" \
-        -H "X-Api-Key: $nextdns_api" \
-        -w "\n%{http_code}")
+    while (( attempt <= max_retries )); do
+        response=$(curl -s -X DELETE "https://api.nextdns.io/profiles/${profile}/rewrites/${domain_id}" \
+            -H "X-Api-Key: $nextdns_api" \
+            -w "\n%{http_code}")
 
-    http_code=$(echo "$response" | tail -n1)
+        http_code=$(echo "$response" | tail -n1)
 
-    if [[ "$http_code" == "200" || "$http_code" == "204" ]]; then
-        green_log "[+] Deleted $domain_name from profile $profile"
-        sleep 0.5  # delay 500ms before next delete
-        return 0
-    else
-        red_log "[!] Failed to delete $domain_name from profile $profile (HTTP $http_code)"
-        return 1
-    fi
+        if [[ "$http_code" == "200" || "$http_code" == "204" ]]; then
+            green_log "[+] Deleted $domain_name from profile $profile (attempt $attempt)"
+            sleep 0.5  # delay 500ms before next delete
+            return 0
+        else
+            red_log "[!] Failed to delete $domain_name (attempt $attempt/$max_retries, HTTP $http_code)"
+            if (( attempt < max_retries )); then
+                sleep 5
+            fi
+        fi
+        ((attempt++))
+    done
+
+    red_log "[!] Giving up on deleting $domain_name after $max_retries attempts"
+    return 1
 }
 
 # ==================================================
@@ -90,10 +100,10 @@ for profile in "${ids[@]}"; do
 
     while IFS=: read -r domain domain_id; do
         if [[ -n "$domain_id" ]]; then
-            if ! delete_rewrite "$profile" "$domain_id" "$domain"; then
-                red_log "[!] Stopping deletions for profile $profile due to error"
+            delete_rewrite "$profile" "$domain_id" "$domain" || {
+                red_log "[!] Stopping deletions for profile $profile due to repeated errors"
                 break
-            fi
+            }
         fi
     done <<< "$(extract_domains_with_ip "$rewrites_json" "$fastest_ip")"
 
