@@ -201,20 +201,21 @@ extract_domains_with_ip() {
     local json="$1"
     local target_ip="$2"
     local domains=""
-
+    
+    # Parse JSON to find all domains with the target IP (excluding nextdns.cloudflare.fastest.ip.com)
     echo "$json" | python3 -c "
-	import json
-	import sys
+import json
+import sys
 
-	try:
-		data = json.load(sys.stdin)
-		for item in data.get('data', []):
-			if (item.get('content') == '$target_ip' and 
-				item.get('name') != 'nextdns.cloudflare.fastest.ip.com'):
-				print(f\"{item['name']}:{item['id']}\")
-	except:
-		pass
-	" 2>/dev/null
+try:
+    data = json.load(sys.stdin)
+    for item in data.get('data', []):
+        if (item.get('content') == '$target_ip' and 
+            item.get('name') != 'nextdns.cloudflare.fastest.ip.com'):
+            print(f\"{item['name']}:{item['id']}\")
+except:
+    pass
+" 2>/dev/null
 }
 
 # Fetch rewrites for all profiles and extract fastest IPs and past CF domains
