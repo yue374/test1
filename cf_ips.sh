@@ -8,6 +8,9 @@ green_log() {
 red_log() {
     echo -e "\e[31m$1\e[0m"
 }
+yellow_log() {
+    echo -e "\e[33m$1\e[0m"
+}
 
 # Count how many Profiles IDs input
 mapfile -t ids <<< "$profile_id"
@@ -109,9 +112,13 @@ check_cloudflare() {
     local response
     local timeout=10
     
+    # Fetch the response and remove null bytes
     response=$(curl -s --connect-timeout "$timeout" --max-time "$timeout" \
         "https://${domain}/cdn-cgi/trace" 2>/dev/null | tr -d '\000')
+    
+    # Check for warp=off in the cleaned response
     if [[ -n "$response" ]] && echo "$response" | grep -q "warp=off" 2>/dev/null; then
+        # Use printf to ensure clean output without null bytes
         printf "%s\n" "$domain" >> ./storage/cf_domain.txt
     fi
 }
@@ -120,18 +127,21 @@ export -f check_cloudflare
 
 # Process domains in parallel
 max_parallel=50
+
 for domain in "${final_domains[@]}"; do
     while [[ $(jobs -r | wc -l) -ge $max_parallel ]]; do
         sleep 0.1
     done
+    
     check_cloudflare "$domain" &
 done
 
 # Wait for all jobs to complete
 wait
 
-# Count CF domain
+# Count results safely by removing any null bytes from the file first
 if [[ -f ./storage/cf_domain.txt ]]; then
+    # Clean the file from any null bytes and count lines
     tr -d '\000' < ./storage/cf_domain.txt > ./storage/cf_domain_clean.txt
     mv ./storage/cf_domain_clean.txt ./storage/cf_domain.txt
     cf_count=$(wc -l < ./storage/cf_domain.txt 2>/dev/null || echo 0)
@@ -143,161 +153,275 @@ green_log "================================================"
 green_log "Domains with Cloudflare CDN: $cf_count"
 green_log "================================================"
 
-# Store fastest IPs for each profile
-declare -A fastest_ips
+# ============================================
+# NEW FEATURE: Manage NextDNS Rewrites
+# ============================================
 
-# Function to get fastest IP from profile rewrites
-get_fastest_ip_from_profile() {
+yellow_log "================================================"
+yellow_log "Starting NextDNS Rewrites Management"
+yellow_log "================================================"
+
+# Store fastest IPs and past CF domains for each profile
+declare -A profile_fastest_ips
+declare -A profile_past_domains
+declare -A profile_domain_ids
+
+# Function to fetch rewrites from a profile
+fetch_rewrites_from_profile() {
     local profile="$1"
     local response
-    
-    echo "[*] Getting fastest IP from profile: $profile"
-    
-    response=$(curl -s -X GET "https://api.nextdns.io/profiles/${profile}/rewrites" \
-        -H "X-Api-Key: $nextdns_api")
-    
-    # Extract IP for nextdns.cloudflare.fastest.ip.com
-    local fastest_ip=$(echo "$response" | grep -o '"name":"nextdns.cloudflare.fastest.ip.com"[^}]*' | \
-        grep -o '"content":"[^"]*"' | sed 's/"content":"\([^"]*\)"/\1/')
-    
-    if [[ -n "$fastest_ip" ]]; then
-        fastest_ips["$profile"]="$fastest_ip"
-        green_log "[+] Profile $profile fastest IP: $fastest_ip"
-    else
-        red_log "[-] No fastest IP found for profile $profile"
-        exit 1
-    fi
-}
-
-# Get fastest IPs for all profiles
-for profile in "${ids[@]}"; do
-    get_fastest_ip_from_profile "$profile"
-done
-
-# Function to make API request with retry logic
-make_api_request() {
-    local method="$1"
-    local url="$2"
-    local data="$3"
-    local max_retries=2
     local retry_count=0
+    local max_retries=2
     
     while [[ $retry_count -lt $max_retries ]]; do
-        if [[ "$method" == "DELETE" ]]; then
-            response=$(curl -s -w "\n%{http_code}" -X DELETE "$url" \
-                -H "X-Api-Key: $nextdns_api")
-        elif [[ "$method" == "POST" ]]; then
-            response=$(curl -s -w "\n%{http_code}" -X POST "$url" \
-                -H "X-Api-Key: $nextdns_api" \
-                -H "Content-Type: application/json" \
-                -d "$data")
-        else
-            response=$(curl -s -w "\n%{http_code}" -X GET "$url" \
-                -H "X-Api-Key: $nextdns_api")
+        response=$(curl -s -X GET "https://api.nextdns.io/profiles/${profile}/rewrites" \
+            -H "X-Api-Key: $nextdns_api")
+        
+        if [[ $? -eq 0 ]] && [[ -n "$response" ]]; then
+            echo "$response"
+            return 0
         fi
         
-        http_code=$(echo "$response" | tail -n 1)
-        body=$(echo "$response" | head -n -1)
+        retry_count=$((retry_count + 1))
+        if [[ $retry_count -lt $max_retries ]]; then
+            red_log "[!] Failed to fetch rewrites for profile $profile. Retrying in 2 minutes..."
+            sleep 120
+        fi
+    done
+    
+    red_log "[!] Failed to fetch rewrites for profile $profile after $max_retries attempts"
+    return 1
+}
+
+# Function to extract fastest IP from rewrites response
+extract_fastest_ip() {
+    local json="$1"
+    local fastest_ip
+    
+    # Find the nextdns.cloudflare.fastest.ip.com entry and extract its IP
+    fastest_ip=$(echo "$json" | grep -o '"name":"nextdns\.cloudflare\.fastest\.ip\.com"[^}]*' | \
+        grep -o '"content":"[^"]*"' | sed 's/"content":"\([^"]*\)"/\1/')
+    
+    echo "$fastest_ip"
+}
+
+# Function to extract domains with specific IP from rewrites
+extract_domains_with_ip() {
+    local json="$1"
+    local target_ip="$2"
+    local domains=""
+    
+    # Parse JSON to find all domains with the target IP (excluding nextdns.cloudflare.fastest.ip.com)
+    echo "$json" | python3 -c "
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+    for item in data.get('data', []):
+        if (item.get('content') == '$target_ip' and 
+            item.get('name') != 'nextdns.cloudflare.fastest.ip.com'):
+            print(f\"{item['name']}:{item['id']}\")
+except:
+    pass
+" 2>/dev/null || {
+    # Fallback to grep/sed if Python is not available
+    echo "$json" | tr ',' '\n' | grep -B1 "\"content\":\"$target_ip\"" | \
+        grep '"name":"' | grep -v 'nextdns.cloudflare.fastest.ip.com' | \
+        sed 's/.*"name":"\([^"]*\)".*/\1/'
+}
+}
+
+# Fetch rewrites for all profiles and extract fastest IPs and past CF domains
+echo "[*] Fetching rewrites from all profiles..."
+
+for profile in "${ids[@]}"; do
+    echo "[*] Processing profile: $profile"
+    
+    rewrites_json=$(fetch_rewrites_from_profile "$profile")
+    if [[ $? -ne 0 ]]; then
+        red_log "[!] Skipping profile $profile due to API errors"
+        continue
+    fi
+    
+    # Extract fastest IP for this profile
+    fastest_ip=$(extract_fastest_ip "$rewrites_json")
+    
+    if [[ -z "$fastest_ip" ]]; then
+        yellow_log "[!] No fastest IP found for profile $profile"
+        continue
+    fi
+    
+    profile_fastest_ips["$profile"]="$fastest_ip"
+    green_log "[+] Profile $profile - Fastest IP: $fastest_ip"
+    
+    # Extract domains with the fastest IP (past CF domains)
+    while IFS=: read -r domain domain_id; do
+        if [[ -n "$domain" ]]; then
+            profile_past_domains["${profile}:${domain}"]="1"
+            profile_domain_ids["${profile}:${domain}"]="$domain_id"
+        fi
+    done <<< "$(extract_domains_with_ip "$rewrites_json" "$fastest_ip")"
+done
+
+# Load current CF domains
+declare -A current_cf_domains
+if [[ -f ./storage/cf_domain.txt ]]; then
+    while IFS= read -r domain; do
+        if [[ -n "$domain" ]]; then
+            current_cf_domains["$domain"]="1"
+        fi
+    done < ./storage/cf_domain.txt
+fi
+
+echo "[+] Current CF domains: ${#current_cf_domains[@]}"
+
+# Function to delete a rewrite
+delete_rewrite() {
+    local profile="$1"
+    local domain_id="$2"
+    local domain_name="$3"
+    local retry_count=0
+    local max_retries=2
+    
+    while [[ $retry_count -lt $max_retries ]]; do
+        response=$(curl -s -X DELETE "https://api.nextdns.io/profiles/${profile}/rewrites/${domain_id}" \
+            -H "X-Api-Key: $nextdns_api" \
+            -w "\n%{http_code}")
         
-        if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
-            echo "$body"
+        http_code=$(echo "$response" | tail -n1)
+        
+        if [[ "$http_code" == "200" ]] || [[ "$http_code" == "204" ]]; then
+            green_log "[+] Deleted: $domain_name from profile $profile"
+            sleep 0.5  # 500ms delay
             return 0
-        else
-            retry_count=$((retry_count + 1))
-            if [[ $retry_count -lt $max_retries ]]; then
-                red_log "[-] API request failed (HTTP $http_code). Waiting 2 minutes before retry..."
-                sleep 120
-            else
-                red_log "[-] API request failed after $max_retries attempts. Exiting."
+        fi
+        
+        retry_count=$((retry_count + 1))
+        if [[ $retry_count -lt $max_retries ]]; then
+            red_log "[!] Failed to delete $domain_name. Waiting 2 minutes before retry..."
+            sleep 120
+        fi
+    done
+    
+    red_log "[!] Failed to delete $domain_name after $max_retries attempts"
+    return 1
+}
+
+# Function to add a rewrite
+add_rewrite() {
+    local profile="$1"
+    local domain="$2"
+    local ip="$3"
+    local retry_count=0
+    local max_retries=2
+    
+    local json_payload="{\"name\":\"${domain}\",\"content\":\"${ip}\"}"
+    
+    while [[ $retry_count -lt $max_retries ]]; do
+        response=$(curl -s -X POST "https://api.nextdns.io/profiles/${profile}/rewrites" \
+            -H "X-Api-Key: $nextdns_api" \
+            -H "Content-Type: application/json" \
+            -d "$json_payload" \
+            -w "\n%{http_code}")
+        
+        http_code=$(echo "$response" | tail -n1)
+        
+        if [[ "$http_code" == "200" ]] || [[ "$http_code" == "201" ]]; then
+            green_log "[+] Added: $domain to profile $profile with IP $ip"
+            sleep 0.5  # 500ms delay
+            return 0
+        fi
+        
+        retry_count=$((retry_count + 1))
+        if [[ $retry_count -lt $max_retries ]]; then
+            red_log "[!] Failed to add $domain. Waiting 2 minutes before retry..."
+            sleep 120
+        fi
+    done
+    
+    red_log "[!] Failed to add $domain after $max_retries attempts"
+    return 1
+}
+
+# Process deletions (domains in past but not in current)
+yellow_log "================================================"
+yellow_log "Processing domain deletions..."
+yellow_log "================================================"
+
+declare -a domains_to_delete
+for profile in "${ids[@]}"; do
+    if [[ -z "${profile_fastest_ips[$profile]}" ]]; then
+        continue
+    fi
+    
+    for key in "${!profile_past_domains[@]}"; do
+        if [[ "$key" == "${profile}:"* ]]; then
+            domain="${key#${profile}:}"
+            if [[ -z "${current_cf_domains[$domain]}" ]]; then
+                domains_to_delete+=("${profile}:${domain}")
+            fi
+        fi
+    done
+done
+
+if [[ ${#domains_to_delete[@]} -gt 0 ]]; then
+    echo "[*] Domains to delete: ${#domains_to_delete[@]}"
+    for item in "${domains_to_delete[@]}"; do
+        IFS=: read -r profile domain <<< "$item"
+        domain_id="${profile_domain_ids[${profile}:${domain}]}"
+        
+        if [[ -n "$domain_id" ]]; then
+            delete_rewrite "$profile" "$domain_id" "$domain"
+            if [[ $? -ne 0 ]]; then
+                red_log "[!] Stopping due to API errors"
                 exit 1
             fi
         fi
     done
-}
-
-# Process past CF domain list
-declare -A past_domains_map
-if [[ -n "$cf_domain" ]]; then
-    echo "[*] Processing past CF domain list..."
-    while IFS= read -r domain; do
-        domain=$(echo "$domain" | tr -d '\r' | xargs)
-        if [[ -n "$domain" ]]; then
-            past_domains_map["$domain"]=1
-        fi
-    done <<< "$cf_domain"
-    echo "[+] Past CF domains count: ${#past_domains_map[@]}"
+else
+    echo "[*] No domains to delete"
 fi
 
-# Read current CF domains
-declare -A current_domains_map
-if [[ -f ./storage/cf_domain.txt ]]; then
-    while IFS= read -r domain; do
-        domain=$(echo "$domain" | tr -d '\r' | xargs)
-        if [[ -n "$domain" ]]; then
-            current_domains_map["$domain"]=1
-        fi
-    done < ./storage/cf_domain.txt
-fi
-echo "[+] Current CF domains count: ${#current_domains_map[@]}"
+# Process additions (domains in current but not in past)
+yellow_log "================================================"
+yellow_log "Processing domain additions..."
+yellow_log "================================================"
 
-# Function to get domain ID from rewrites
-get_domain_id() {
-    local profile="$1"
-    local domain="$2"
-    local fastest_ip="${fastest_ips[$profile]}"
+declare -a domains_to_add
+for domain in "${!current_cf_domains[@]}"; do
+    needs_add=1
     
-    response=$(make_api_request "GET" "https://api.nextdns.io/profiles/${profile}/rewrites")
-    
-    # Find domain with matching name and fastest IP
-    domain_id=$(echo "$response" | \
-        grep -o "\"id\":\"[^\"]*\",\"name\":\"$domain\"[^}]*\"content\":\"$fastest_ip\"" | \
-        grep -o '"id":"[^"]*"' | \
-        sed 's/"id":"\([^"]*\)"/\1/' | \
-        head -n 1)
-    
-    echo "$domain_id"
-}
-
-# Remove domains that are in past but not in current
-if [[ -n "$cf_domain" ]]; then
-    echo "[*] Checking for domains to remove..."
-    for domain in "${!past_domains_map[@]}"; do
-        if [[ -z "${current_domains_map[$domain]}" ]]; then
-            echo "[*] Removing domain: $domain"
-            
-            for profile in "${ids[@]}"; do
-                domain_id=$(get_domain_id "$profile" "$domain")
-                
-                if [[ -n "$domain_id" ]]; then
-                    echo "[*] Deleting $domain (ID: $domain_id) from profile $profile"
-                    make_api_request "DELETE" "https://api.nextdns.io/profiles/${profile}/rewrites/${domain_id}"
-                    sleep 0.5
-                fi
-            done
+    for profile in "${ids[@]}"; do
+        if [[ -n "${profile_past_domains[${profile}:${domain}]}" ]]; then
+            needs_add=0
+            break
         fi
     done
-fi
-
-# Add domains that are in current but not in past
-echo "[*] Checking for domains to add..."
-for domain in "${!current_domains_map[@]}"; do
-    if [[ -z "${past_domains_map[$domain]}" ]] || [[ -z "$cf_domain" ]]; then
-        echo "[*] Adding domain: $domain"
-        
-        for profile in "${ids[@]}"; do
-            fastest_ip="${fastest_ips[$profile]}"
-            if [[ -n "$fastest_ip" ]]; then
-                json_data="{\"name\":\"$domain\",\"content\":\"$fastest_ip\"}"
-                echo "[*] Adding $domain to profile $profile with IP $fastest_ip"
-                make_api_request "POST" "https://api.nextdns.io/profiles/${profile}/rewrites" "$json_data"
-                sleep 0.5
-            fi
-        done
+    
+    if [[ $needs_add -eq 1 ]]; then
+        domains_to_add+=("$domain")
     fi
 done
 
-green_log "[+] NextDNS rewrites synchronization completed"
+if [[ ${#domains_to_add[@]} -gt 0 ]]; then
+    echo "[*] Domains to add: ${#domains_to_add[@]}"
+    
+    for domain in "${domains_to_add[@]}"; do
+        for profile in "${ids[@]}"; do
+            if [[ -n "${profile_fastest_ips[$profile]}" ]]; then
+                add_rewrite "$profile" "$domain" "${profile_fastest_ips[$profile]}"
+                if [[ $? -ne 0 ]]; then
+                    red_log "[!] Stopping due to API errors"
+                    exit 1
+                fi
+            fi
+        done
+    done
+else
+    echo "[*] No domains to add"
+fi
 
 green_log "================================================"
-green_log "Script execution completed successfully!"
+green_log "NextDNS Rewrites Management Complete!"
 green_log "================================================"
