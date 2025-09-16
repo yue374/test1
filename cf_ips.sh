@@ -125,7 +125,7 @@ max_parallel=50
 
 for domain in "${final_domains[@]}"; do
     while [[ $(jobs -r | wc -l) -ge $max_parallel ]]; do
-        sleep 0.1
+        sleep 0.4
     done
     
     check_cloudflare "$domain" &
