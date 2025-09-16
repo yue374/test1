@@ -1,120 +1,86 @@
 #!/bin/bash
-# ==================================================
-# Remove all domains that point to fastest IP (nextdns.cloudflare.fastest.ip.com)
-# ==================================================
+set -euo pipefail
 
-green_log() {
-    echo -e "\e[32m$1\e[0m"
-}
-red_log() {
-    echo -e "\e[31m$1\e[0m"
-}
-yellow_log() {
-    echo -e "\e[33m$1\e[0m"
-}
+mkdir -p ./storage
 
-# Read profile IDs
+# ===================== #
+# Colored output logs
+# ===================== #
+green_log() { echo -e "\e[32m$1\e[0m"; }
+red_log()   { echo -e "\e[31m$1\e[0m"; }
+yellow_log(){ echo -e "\e[33m$1\e[0m"; }
+
+# ===================== #
+# Config
+# ===================== #
+exclude_domain="nextdns.cloudflare.fastest.ip.com"
+
+# ===================== #
+# Check required env
+# ===================== #
+if [[ -z "${nextdns_api:-}" ]]; then
+    red_log "❌ nextdns_api is not set"
+    exit 1
+fi
+
+if [[ -z "${profile_id:-}" ]]; then
+    red_log "❌ profile_id is not set"
+    exit 1
+fi
+
+# ===================== #
+# Load profile IDs
+# ===================== #
 mapfile -t ids <<< "$profile_id"
-num_profile_id=${#ids[@]}
-echo "[+] Number Profiles ID: $num_profile_id"
 
-# Function: fetch rewrites
-fetch_rewrites_from_profile() {
-    local profile="$1"
-    curl -s -X GET "https://api.nextdns.io/profiles/${profile}/rewrites" \
-        -H "X-Api-Key: $nextdns_api"
-}
+# ===================== #
+# Process each profile
+# ===================== #
+for pid in "${ids[@]}"; do
+    green_log "🔎 Fetching domains for profile: $pid"
 
-# Function: extract fastest IP
-extract_fastest_ip() {
-    local json="$1"
-    echo "$json" | grep -o '"name":"nextdns\.cloudflare\.fastest\.ip\.com"[^}]*' \
-        | grep -o '"content":"[^"]*"' \
-        | sed 's/"content":"\([^"]*\)"/\1/'
-}
+    # Fetch domains
+    domains=$(curl -s -X GET \
+        "https://api.nextdns.io/profiles/$pid/analytics/domains?status=default%2Callowed&from=-30d&limit=1000" \
+        -H "X-Api-Key: $nextdns_api" | jq -r '.data[].domain')
 
-# Function: extract domains mapped to target IP
-extract_domains_with_ip() {
-    local json="$1"
-    local target_ip="$2"
+    # Filter out excluded domain
+    mapfile -t filtered <<< "$(printf '%s\n' $domains | grep -v "^$exclude_domain$")"
 
-    echo "$json" | python3 -c "
-import json,sys
-try:
-    data=json.load(sys.stdin)
-    for item in data.get('data', []):
-        if item.get('content') == '$target_ip':
-            print(f\"{item['name']}:{item['id']}\")
-except:
-    pass
-" 2>/dev/null
-}
+    # Count and show before deleting
+    count=${#filtered[@]}
+    yellow_log "⚠️ Found $count domains to delete (excluding: $exclude_domain)"
 
-# Function: delete rewrite with retries
-delete_rewrite() {
-    local profile="$1"
-    local domain_id="$2"
-    local domain_name="$3"
-    local max_retries=5
-    local attempt=1
+    deleted=0
+    failed=0
 
-    # Skip special domain
-    if [[ "$domain_name" == "nextdns.cloudflare.fastest.ip.com" ]]; then
-        yellow_log "[*] Skipping protected domain: $domain_name"
-        return 0
-    fi
+    for domain in "${filtered[@]}"; do
+        attempt=1
+        success=0
+        while [ $attempt -le 5 ]; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                "https://api.nextdns.io/profiles/$pid/analytics/domains/$domain" \
+                -H "X-Api-Key: $nextdns_api")
 
-    while (( attempt <= max_retries )); do
-        response=$(curl -s -X DELETE "https://api.nextdns.io/profiles/${profile}/rewrites/${domain_id}" \
-            -H "X-Api-Key: $nextdns_api" \
-            -w "\n%{http_code}")
-
-        http_code=$(echo "$response" | tail -n1)
-
-        if [[ "$http_code" == "200" || "$http_code" == "204" ]]; then
-            green_log "[+] Deleted $domain_name from profile $profile (attempt $attempt)"
-            sleep 1  # delay 500ms before next delete
-            return 0
-        else
-            red_log "[!] Failed to delete $domain_name (attempt $attempt/$max_retries, HTTP $http_code)"
-            if (( attempt < max_retries )); then
-                sleep 20
+            if [ "$status" -eq 200 ]; then
+                green_log "[$pid] ✅ Deleted domain: $domain"
+                success=1
+                ((deleted++))
+                sleep 0.5
+                break
+            else
+                red_log "[$pid] ❌ Failed to delete $domain (status $status), attempt $attempt/5"
+                ((attempt++))
+                sleep 5
             fi
+        done
+
+        if [ $success -eq 0 ]; then
+            red_log "[$pid] ⚠️ Skipped $domain after 5 failed attempts"
+            ((failed++))
         fi
-        ((attempt++))
     done
 
-    red_log "[!] Giving up on deleting $domain_name after $max_retries attempts"
-    return 1
-}
-
-# ==================================================
-# Main logic
-# ==================================================
-for profile in "${ids[@]}"; do
-    echo "[*] Processing profile: $profile"
-
-    rewrites_json=$(fetch_rewrites_from_profile "$profile")
-    fastest_ip=$(extract_fastest_ip "$rewrites_json")
-
-    if [[ -z "$fastest_ip" ]]; then
-        yellow_log "[!] No fastest IP found for profile $profile"
-        continue
-    fi
-
-    echo "[+] Fastest IP for $profile: $fastest_ip"
-
-    while IFS=: read -r domain domain_id; do
-        if [[ -n "$domain_id" ]]; then
-            delete_rewrite "$profile" "$domain_id" "$domain" || {
-                red_log "[!] Stopping deletions for profile $profile due to repeated errors"
-                break
-            }
-        fi
-    done <<< "$(extract_domains_with_ip "$rewrites_json" "$fastest_ip")"
-
+    # Summary per profile
+    yellow_log "📊 Summary for $pid: Deleted=$deleted, Failed=$failed, Skipped=$exclude_domain"
 done
-
-green_log "================================================"
-green_log "Cleanup complete!"
-green_log "================================================"
