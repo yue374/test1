@@ -189,11 +189,10 @@ fetch_rewrites_from_profile() {
 extract_fastest_ip() {
     local json="$1"
     local fastest_ip
-    
-    # Find the nextdns.cloudflare.fastest.ip.com entry and extract its IP
+
     fastest_ip=$(echo "$json" | grep -o '"name":"nextdns\.cloudflare\.fastest\.ip\.com"[^}]*' | \
         grep -o '"content":"[^"]*"' | sed 's/"content":"\([^"]*\)"/\1/')
-    
+
     echo "$fastest_ip"
 }
 
@@ -202,28 +201,26 @@ extract_domains_with_ip() {
     local json="$1"
     local target_ip="$2"
     local domains=""
-    
-    # Parse JSON to find all domains with the target IP (excluding nextdns.cloudflare.fastest.ip.com)
-    echo "$json" | python3 -c "
-import json
-import sys
 
-try:
-    data = json.load(sys.stdin)
-    for item in data.get('data', []):
-        if (item.get('content') == '$target_ip' and 
-            item.get('name') != 'nextdns.cloudflare.fastest.ip.com'):
-            print(f\"{item['name']}:{item['id']}\")
-except:
-    pass
-" 2>/dev/null
+    echo "$json" | python3 -c "
+	import json
+	import sys
+
+	try:
+		data = json.load(sys.stdin)
+		for item in data.get('data', []):
+			if (item.get('content') == '$target_ip' and 
+				item.get('name') != 'nextdns.cloudflare.fastest.ip.com'):
+				print(f\"{item['name']}:{item['id']}\")
+	except:
+		pass
+	" 2>/dev/null
 }
 
 # Fetch rewrites for all profiles and extract fastest IPs and past CF domains
-echo "[*] Fetching rewrites from all profiles..."
+echo "[+] Fetching rewrites from all profiles..."
 
 for profile in "${ids[@]}"; do
-    echo "[*] Processing profile: $profile"
     
     rewrites_json=$(fetch_rewrites_from_profile "$profile")
     if [[ $? -ne 0 ]]; then
@@ -240,7 +237,6 @@ for profile in "${ids[@]}"; do
     fi
     
     profile_fastest_ips["$profile"]="$fastest_ip"
-    green_log "[+] Profile $profile - Fastest IP: $fastest_ip"
     
     # Extract past CF domains
     while IFS=: read -r domain domain_id; do
@@ -327,9 +323,7 @@ add_rewrite() {
 }
 
 # Process deletions domains
-yellow_log "================================================"
-yellow_log "Processing domain deletions..."
-yellow_log "================================================"
+echo "[+] Processing domain deletions..."
 
 declare -a domains_to_delete
 for profile in "${ids[@]}"; do
@@ -366,9 +360,7 @@ else
 fi
 
 # Process additions domains
-yellow_log "================================================"
-yellow_log "Processing domain additions..."
-yellow_log "================================================"
+echo "[+] Processing domain additions..."
 
 declare -a domains_to_add
 for domain in "${!current_cf_domains[@]}"; do
