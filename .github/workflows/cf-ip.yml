@@ -36,6 +36,20 @@ jobs:
           exclude_domain: ${{ vars.EXCLUDE_DOMAIN }}
           include_domain: ${{ vars.INCLUDE_DOMAIN }}
 
+      - name: Read domain from file
+        id: domain
+        run: |
+          domain=$(cat ./storage/cf_domain.txt | tr -d '\n\r')
+          echo "domain=$domain" >> $GITHUB_OUTPUT
+
+      - name: Update repository variable CF_DOMAIN
+        run: |
+          curl -s -X PATCH \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/actions/variables/CF_DOMAIN \
+            -d "{\"name\":\"CF_DOMAIN\",\"value\":\"${{ steps.domain.outputs.domain }}\"}"
+
       - name: Release
         uses: ncipollo/release-action@v1.14.0
         with:

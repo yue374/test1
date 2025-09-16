@@ -298,56 +298,6 @@ done
 
 green_log "[+] NextDNS rewrites synchronization completed"
 
-# Update GitHub repository variable
-if [[ -n "$GITHUB_TOKEN" ]] && [[ -n "$GITHUB_REPOSITORY" ]]; then
-    echo "[*] Updating GitHub repository variable CF_DOMAIN..."
-    
-    # Read all domains from cf_domain.txt
-    if [[ -f ./storage/cf_domain.txt ]]; then
-        cf_domains_content=$(cat ./storage/cf_domain.txt)
-    else
-        cf_domains_content=""
-    fi
-    
-    # Prepare JSON payload
-    json_payload=$(jq -n --arg value "$cf_domains_content" '{name: "CF_DOMAIN", value: $value}')
-    
-    # Get repository owner and name
-    repo_owner=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f1)
-    repo_name=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2)
-    
-    # Update or create repository variable
-    response=$(curl -s -w "\n%{http_code}" -X PATCH \
-        "https://api.github.com/repos/${repo_owner}/${repo_name}/actions/variables/CF_DOMAIN" \
-        -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer $GITHUB_TOKEN" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        -d "$json_payload")
-    
-    http_code=$(echo "$response" | tail -n 1)
-    
-    if [[ "$http_code" == "404" ]]; then
-        # Variable doesn't exist, create it
-        echo "[*] Creating new GitHub variable CF_DOMAIN..."
-        response=$(curl -s -w "\n%{http_code}" -X POST \
-            "https://api.github.com/repos/${repo_owner}/${repo_name}/actions/variables" \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            -d "$json_payload")
-        
-        http_code=$(echo "$response" | tail -n 1)
-    fi
-    
-    if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
-        green_log "[+] GitHub variable CF_DOMAIN updated successfully"
-    else
-        red_log "[-] Failed to update GitHub variable CF_DOMAIN (HTTP $http_code)"
-    fi
-else
-    echo "[!] Skipping GitHub update (GITHUB_TOKEN or GITHUB_REPOSITORY not set)"
-fi
-
 green_log "================================================"
 green_log "Script execution completed successfully!"
 green_log "================================================"
