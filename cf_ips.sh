@@ -109,13 +109,9 @@ check_cloudflare() {
     local response
     local timeout=10
     
-    # Fetch the response and remove null bytes
     response=$(curl -s --connect-timeout "$timeout" --max-time "$timeout" \
         "https://${domain}/cdn-cgi/trace" 2>/dev/null | tr -d '\000')
-    
-    # Check for warp=off in the cleaned response
     if [[ -n "$response" ]] && echo "$response" | grep -q "warp=off" 2>/dev/null; then
-        # Use printf to ensure clean output without null bytes
         printf "%s\n" "$domain" >> ./storage/cf_domain.txt
     fi
 }
@@ -124,21 +120,18 @@ export -f check_cloudflare
 
 # Process domains in parallel
 max_parallel=50
-
 for domain in "${final_domains[@]}"; do
     while [[ $(jobs -r | wc -l) -ge $max_parallel ]]; do
         sleep 0.1
     done
-    
     check_cloudflare "$domain" &
 done
 
 # Wait for all jobs to complete
 wait
 
-# Count results safely by removing any null bytes from the file first
+# Count CF domain
 if [[ -f ./storage/cf_domain.txt ]]; then
-    # Clean the file from any null bytes and count lines
     tr -d '\000' < ./storage/cf_domain.txt > ./storage/cf_domain_clean.txt
     mv ./storage/cf_domain_clean.txt ./storage/cf_domain.txt
     cf_count=$(wc -l < ./storage/cf_domain.txt 2>/dev/null || echo 0)

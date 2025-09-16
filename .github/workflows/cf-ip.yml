@@ -24,14 +24,18 @@ jobs:
           nextdns_api: ${{ secrets.NEXTDNS_API }}
           profile_id: ${{ secrets.PROFILE_ID }}
           repository: ${{ github.repository }}
+
       - name: Rewritting
         run: bash cf_ips.sh
         env:
           nextdns_api: ${{ secrets.NEXTDNS_API }}
           profile_id: ${{ secrets.PROFILE_ID }}
           repository: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          cf_domain: ${{ vars.CF_DOMAIN }}
           exclude_domain: ${{ vars.EXCLUDE_DOMAIN }}
           include_domain: ${{ vars.INCLUDE_DOMAIN }}
+
       - name: Release
         uses: ncipollo/release-action@v1.14.0
         with:
