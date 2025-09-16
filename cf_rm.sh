@@ -43,7 +43,7 @@ import json,sys
 try:
     data=json.load(sys.stdin)
     for item in data.get('data', []):
-        if item.get('content') == '$target_ip' and item.get('name') != 'nextdns.cloudflare.fastest.ip.com':
+        if item.get('content') == '$target_ip':
             print(f\"{item['name']}:{item['id']}\")
 except:
     pass
@@ -58,6 +58,12 @@ delete_rewrite() {
     local max_retries=5
     local attempt=1
 
+    # Skip special domain
+    if [[ "$domain_name" == "nextdns.cloudflare.fastest.ip.com" ]]; then
+        yellow_log "[*] Skipping protected domain: $domain_name"
+        return 0
+    fi
+
     while (( attempt <= max_retries )); do
         response=$(curl -s -X DELETE "https://api.nextdns.io/profiles/${profile}/rewrites/${domain_id}" \
             -H "X-Api-Key: $nextdns_api" \
@@ -67,12 +73,12 @@ delete_rewrite() {
 
         if [[ "$http_code" == "200" || "$http_code" == "204" ]]; then
             green_log "[+] Deleted $domain_name from profile $profile (attempt $attempt)"
-            sleep 0.5  # delay 500ms before next delete
+            sleep 1  # delay 500ms before next delete
             return 0
         else
             red_log "[!] Failed to delete $domain_name (attempt $attempt/$max_retries, HTTP $http_code)"
             if (( attempt < max_retries )); then
-                sleep 5
+                sleep 20
             fi
         fi
         ((attempt++))
