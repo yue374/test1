@@ -260,7 +260,7 @@ delete_rewrite() {
         http_code=$(echo "$response" | tail -n1)
         
         if [[ "$http_code" == "200" ]] || [[ "$http_code" == "204" ]]; then
-            sleep 0.5  # 500ms delay
+            sleep 1
             return 0
         fi
         
@@ -294,7 +294,7 @@ add_rewrite() {
         http_code=$(echo "$response" | tail -n1)
         
         if [[ "$http_code" == "200" ]] || [[ "$http_code" == "201" ]]; then
-            sleep 0.5
+            sleep 1
             return 0
         fi
         

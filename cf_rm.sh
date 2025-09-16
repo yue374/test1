@@ -1,7 +1,4 @@
 #!/bin/bash
-# ==================================================
-# Remove all domains that point to fastest IP (nextdns.cloudflare.fastest.ip.com)
-# ==================================================
 
 green_log() {
     echo -e "\e[32m$1\e[0m"
@@ -13,19 +10,16 @@ yellow_log() {
     echo -e "\e[33m$1\e[0m"
 }
 
-# Read profile IDs
 mapfile -t ids <<< "$profile_id"
 num_profile_id=${#ids[@]}
 echo "[+] Number Profiles ID: $num_profile_id"
 
-# Function: fetch rewrites
 fetch_rewrites_from_profile() {
     local profile="$1"
     curl -s -X GET "https://api.nextdns.io/profiles/${profile}/rewrites" \
         -H "X-Api-Key: $nextdns_api"
 }
 
-# Function: extract fastest IP
 extract_fastest_ip() {
     local json="$1"
     echo "$json" | grep -o '"name":"nextdns\.cloudflare\.fastest\.ip\.com"[^}]*' \
@@ -33,7 +27,6 @@ extract_fastest_ip() {
         | sed 's/"content":"\([^"]*\)"/\1/'
 }
 
-# Function: extract domains mapped to target IP
 extract_domains_with_ip() {
     local json="$1"
     local target_ip="$2"
@@ -50,7 +43,6 @@ except:
 " 2>/dev/null
 }
 
-# Function: delete rewrite with retries
 delete_rewrite() {
     local profile="$1"
     local domain_id="$2"
@@ -58,9 +50,7 @@ delete_rewrite() {
     local max_retries=5
     local attempt=1
 
-    # Skip special domain
     if [[ "$domain_name" == "nextdns.cloudflare.fastest.ip.com" ]]; then
-        yellow_log "[*] Skipping protected domain: $domain_name"
         return 0
     fi
 
@@ -72,27 +62,20 @@ delete_rewrite() {
         http_code=$(echo "$response" | tail -n1)
 
         if [[ "$http_code" == "200" || "$http_code" == "204" ]]; then
-            green_log "[+] Deleted $domain_name from profile $profile (attempt $attempt)"
-            sleep 1  # delay 500ms before next delete
+            sleep 1
             return 0
         else
-            red_log "[!] Failed to delete $domain_name (attempt $attempt/$max_retries, HTTP $http_code)"
             if (( attempt < max_retries )); then
                 sleep 20
             fi
         fi
         ((attempt++))
     done
-
-    red_log "[!] Giving up on deleting $domain_name after $max_retries attempts"
     return 1
 }
 
-# ==================================================
-# Main logic
-# ==================================================
+
 for profile in "${ids[@]}"; do
-    echo "[*] Processing profile: $profile"
 
     rewrites_json=$(fetch_rewrites_from_profile "$profile")
     fastest_ip=$(extract_fastest_ip "$rewrites_json")
@@ -101,8 +84,6 @@ for profile in "${ids[@]}"; do
         yellow_log "[!] No fastest IP found for profile $profile"
         continue
     fi
-
-    echo "[+] Fastest IP for $profile: $fastest_ip"
 
     while IFS=: read -r domain domain_id; do
         if [[ -n "$domain_id" ]]; then
