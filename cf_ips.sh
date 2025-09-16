@@ -24,7 +24,6 @@ done
 
 echo "[+] Number Profiles ID: $num_profile_id"
 
-# Initialize arrays for domains
 declare -A all_domains_map
 declare -a final_domains
 
@@ -37,8 +36,7 @@ fetch_domains_from_profile() {
     
     response=$(curl -s -X GET "https://api.nextdns.io/profiles/${profile}/analytics/domains?status=default%2Callowed&from=-30d&limit=1000" \
         -H "X-Api-Key: $nextdns_api")
-    
-    # Remove null bytes and extract domains
+
     echo "$response" \
         | tr -d '\000' \
         | grep -o '"domain":"[^"]*"' \
@@ -71,7 +69,7 @@ should_exclude() {
         if [[ -z "$exclude" ]]; then
             continue
         fi
-        
+
         if [[ "$domain" == "$exclude" ]] || [[ "$domain" == *".$exclude" ]]; then
             return 0
         fi
@@ -103,7 +101,6 @@ done
 
 echo "[+] Domains after filtering: ${#final_domains[@]}"
 
-# Clear the output file
 > ./storage/cf_domain.txt
 
 # Check if domain uses Cloudflare
@@ -111,14 +108,11 @@ check_cloudflare() {
     local domain="$1"
     local response
     local timeout=10
-    
-    # Fetch the response and remove null bytes
+
     response=$(curl -s --connect-timeout "$timeout" --max-time "$timeout" \
         "https://${domain}/cdn-cgi/trace" 2>/dev/null | tr -d '\000')
-    
-    # Check for warp=off in the cleaned response
+
     if [[ -n "$response" ]] && echo "$response" | grep -q "warp=off" 2>/dev/null; then
-        # Use printf to ensure clean output without null bytes
         printf "%s\n" "$domain" >> ./storage/cf_domain.txt
     fi
 }
@@ -136,12 +130,10 @@ for domain in "${final_domains[@]}"; do
     check_cloudflare "$domain" &
 done
 
-# Wait for all jobs to complete
 wait
 
-# Count results safely by removing any null bytes from the file first
+# Count results
 if [[ -f ./storage/cf_domain.txt ]]; then
-    # Clean the file from any null bytes and count lines
     tr -d '\000' < ./storage/cf_domain.txt > ./storage/cf_domain_clean.txt
     mv ./storage/cf_domain_clean.txt ./storage/cf_domain.txt
     cf_count=$(wc -l < ./storage/cf_domain.txt 2>/dev/null || echo 0)
@@ -153,12 +145,11 @@ green_log "================================================"
 green_log "Domains with Cloudflare CDN: $cf_count"
 green_log "================================================"
 
-# Store fastest IPs and past CF domains for each profile
 declare -A profile_fastest_ips
 declare -A profile_past_domains
 declare -A profile_domain_ids
 
-# Function to fetch rewrites from a profile
+# Fetch rewrites from a profile
 fetch_rewrites_from_profile() {
     local profile="$1"
     local response
@@ -185,7 +176,7 @@ fetch_rewrites_from_profile() {
     return 1
 }
 
-# Function to extract fastest IP from rewrites response
+# Extract fastest IP
 extract_fastest_ip() {
     local json="$1"
     local fastest_ip
@@ -196,13 +187,12 @@ extract_fastest_ip() {
     echo "$fastest_ip"
 }
 
-# Function to extract domains with specific IP from rewrites
+# Extract domains
 extract_domains_with_ip() {
     local json="$1"
     local target_ip="$2"
     local domains=""
-    
-    # Parse JSON to find all domains with the target IP (excluding nextdns.cloudflare.fastest.ip.com)
+
     echo "$json" | python3 -c "
 import json
 import sys
@@ -229,7 +219,6 @@ for profile in "${ids[@]}"; do
         continue
     fi
     
-    # Extract fastest IP for this profile
     fastest_ip=$(extract_fastest_ip "$rewrites_json")
     
     if [[ -z "$fastest_ip" ]]; then
@@ -238,8 +227,7 @@ for profile in "${ids[@]}"; do
     fi
     
     profile_fastest_ips["$profile"]="$fastest_ip"
-    
-    # Extract past CF domains
+
     while IFS=: read -r domain domain_id; do
         if [[ -n "$domain" ]]; then
             profile_past_domains["${profile}:${domain}"]="1"
@@ -258,7 +246,7 @@ if [[ -f ./storage/cf_domain.txt ]]; then
     done < ./storage/cf_domain.txt
 fi
 
-# Function to delete a rewrite
+# Delete rewrite
 delete_rewrite() {
     local profile="$1"
     local domain_id="$2"
@@ -289,7 +277,7 @@ delete_rewrite() {
     return 1
 }
 
-# Function to add a rewrite
+# Add rewrite
 add_rewrite() {
     local profile="$1"
     local domain="$2"

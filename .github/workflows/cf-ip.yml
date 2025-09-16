@@ -5,9 +5,6 @@ on:
     - cron: "0 21 * * *"
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: true
 
 jobs:
   Cloudflare_IPs_rewrite:
