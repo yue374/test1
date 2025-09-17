@@ -325,7 +325,7 @@ for profile in "${ids[@]}"; do
     fastest_ip=$(extract_fastest_ip "$rewrites_json")
     
     if [[ -z "$fastest_ip" ]]; then
-        yellow_log "[!] No fastest IP found for profile $profile"
+        yellow_log "[!] No fastest IP found on profile"
         continue
     fi
     
@@ -363,7 +363,7 @@ for profile in "${ids[@]}"; do
         old_ip="${profile_old_fastest_ips[$profile]}"
         new_ip="${profile_fastest_ips[$profile]}"
         
-        green_log "[*] Processing IP change for profile $profile"
+        green_log "[*] Processing IP change on profile"
 
         rewrites_json=$(fetch_rewrites_from_profile "$profile")
         if [[ $? -ne 0 ]]; then
