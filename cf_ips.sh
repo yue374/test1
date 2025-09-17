@@ -12,6 +12,9 @@ red_log() {
 yellow_log() {
     echo -e "\e[33m$1\e[0m"
 }
+blue_log() {
+    echo -e "\e[34m$1\e[0m"
+}
 
 # Count how many Profiles IDs input
 mapfile -t ids <<< "$profile_id"
@@ -147,8 +150,10 @@ green_log "Domains with Cloudflare CDN: $cf_count"
 green_log "================================================"
 
 declare -A profile_fastest_ips
+declare -A profile_old_fastest_ips
 declare -A profile_past_domains
 declare -A profile_domain_ids
+declare -A profile_ip_changed
 
 # Fetch rewrites from a profile
 fetch_rewrites_from_profile() {
@@ -188,7 +193,41 @@ extract_fastest_ip() {
     echo "$fastest_ip"
 }
 
-# Extract domains
+# Find old fastest IP by checking existing domain rewrites
+find_old_fastest_ip() {
+    local json="$1"
+    local current_fastest="$2"
+    local old_ip=""
+    local ip_counts=()
+    
+    # Extract all IPs from domain rewrites (excluding the fastest.ip.com entry)
+    echo "$json" | python3 -c "
+import json
+import sys
+from collections import Counter
+
+try:
+    data = json.load(sys.stdin)
+    ips = []
+    for item in data.get('data', []):
+        if (item.get('name') != 'nextdns.cloudflare.fastest.ip.com' and 
+            item.get('content') and 
+            item.get('content') != '$current_fastest'):
+            ips.append(item.get('content'))
+    
+    if ips:
+        ip_counter = Counter(ips)
+        # Get IPs that appear on at least 20 domains
+        for ip, count in ip_counter.most_common():
+            if count >= 20:
+                print(ip)
+                break
+except:
+    pass
+" 2>/dev/null
+}
+
+# Extract domains with specific IP
 extract_domains_with_ip() {
     local json="$1"
     local target_ip="$2"
@@ -208,44 +247,6 @@ except:
     pass
 " 2>/dev/null
 }
-
-# Fetch rewrites for all profiles and extract fastest IPs and past CF domains
-echo "[+] Fetching rewrites from all profiles..."
-
-for profile in "${ids[@]}"; do
-    
-    rewrites_json=$(fetch_rewrites_from_profile "$profile")
-    if [[ $? -ne 0 ]]; then
-        red_log "[!] Skipping profile $profile due to API errors"
-        continue
-    fi
-    
-    fastest_ip=$(extract_fastest_ip "$rewrites_json")
-    
-    if [[ -z "$fastest_ip" ]]; then
-        yellow_log "[!] No fastest IP found for profile $profile"
-        continue
-    fi
-    
-    profile_fastest_ips["$profile"]="$fastest_ip"
-
-    while IFS=: read -r domain domain_id; do
-        if [[ -n "$domain" ]]; then
-            profile_past_domains["${profile}:${domain}"]="1"
-            profile_domain_ids["${profile}:${domain}"]="$domain_id"
-        fi
-    done <<< "$(extract_domains_with_ip "$rewrites_json" "$fastest_ip")"
-done
-
-# Load current CF domains
-declare -A current_cf_domains
-if [[ -f ./storage/cf_domain.txt ]]; then
-    while IFS= read -r domain; do
-        if [[ -n "$domain" ]]; then
-            current_cf_domains["$domain"]="1"
-        fi
-    done < ./storage/cf_domain.txt
-fi
 
 # Delete rewrite
 delete_rewrite() {
@@ -312,7 +313,143 @@ add_rewrite() {
     return 1
 }
 
-# Process deletions domains
+# Fetch rewrites for all profiles and extract fastest IPs and past CF domains
+echo "[+] Fetching rewrites from all profiles..."
+
+for profile in "${ids[@]}"; do
+    
+    rewrites_json=$(fetch_rewrites_from_profile "$profile")
+    if [[ $? -ne 0 ]]; then
+        red_log "[!] Skipping profile $profile due to API errors"
+        continue
+    fi
+    
+    fastest_ip=$(extract_fastest_ip "$rewrites_json")
+    
+    if [[ -z "$fastest_ip" ]]; then
+        yellow_log "[!] No fastest IP found for profile $profile"
+        continue
+    fi
+    
+    profile_fastest_ips["$profile"]="$fastest_ip"
+    
+    # Find old fastest IP (IP that appears in 20+ domains)
+    old_fastest_ip=$(find_old_fastest_ip "$rewrites_json" "$fastest_ip")
+    
+    if [[ -n "$old_fastest_ip" ]] && [[ "$old_fastest_ip" != "$fastest_ip" ]]; then
+        profile_old_fastest_ips["$profile"]="$old_fastest_ip"
+        profile_ip_changed["$profile"]="1"
+        blue_log "[*] Profile $profile: IP changed from $old_fastest_ip to $fastest_ip"
+    fi
+
+    # Store domains with current fastest IP
+    while IFS=: read -r domain domain_id; do
+        if [[ -n "$domain" ]]; then
+            profile_past_domains["${profile}:${domain}"]="1"
+            profile_domain_ids["${profile}:${domain}"]="$domain_id"
+        fi
+    done <<< "$(extract_domains_with_ip "$rewrites_json" "$fastest_ip")"
+    
+    # If IP changed, also store domains with old IP for deletion
+    if [[ -n "${profile_ip_changed[$profile]}" ]]; then
+        while IFS=: read -r domain domain_id; do
+            if [[ -n "$domain" ]]; then
+                # Mark these domains for deletion and re-addition
+                profile_domain_ids["${profile}:${domain}:old"]="$domain_id"
+            fi
+        done <<< "$(extract_domains_with_ip "$rewrites_json" "$old_fastest_ip")"
+    fi
+done
+
+# Process IP changes first (delete all domains with old IP and re-add with new IP)
+echo "[+] Processing IP changes..."
+
+for profile in "${ids[@]}"; do
+    if [[ -n "${profile_ip_changed[$profile]}" ]]; then
+        old_ip="${profile_old_fastest_ips[$profile]}"
+        new_ip="${profile_fastest_ips[$profile]}"
+        
+        green_log "[*] Processing IP change for profile $profile"
+        
+        # Get rewrites again to ensure we have the latest data
+        rewrites_json=$(fetch_rewrites_from_profile "$profile")
+        if [[ $? -ne 0 ]]; then
+            red_log "[!] Failed to fetch rewrites for IP change processing"
+            continue
+        fi
+        
+        declare -a domains_to_update=()
+        
+        # Collect domains with old IP
+        while IFS=: read -r domain domain_id; do
+            if [[ -n "$domain" ]] && [[ -n "$domain_id" ]]; then
+                domains_to_update+=("${domain}:${domain_id}")
+            fi
+        done <<< "$(extract_domains_with_ip "$rewrites_json" "$old_ip")"
+        
+        if [[ ${#domains_to_update[@]} -gt 0 ]]; then
+            yellow_log "[*] Updating ${#domains_to_update[@]} domains from $old_ip to $new_ip"
+            
+            # Delete domains with old IP
+            for item in "${domains_to_update[@]}"; do
+                IFS=: read -r domain domain_id <<< "$item"
+                delete_rewrite "$profile" "$domain_id" "$domain"
+                if [[ $? -ne 0 ]]; then
+                    red_log "[!] Error during IP change deletion"
+                fi
+            done
+            
+            # Re-add domains with new IP
+            for item in "${domains_to_update[@]}"; do
+                IFS=: read -r domain domain_id <<< "$item"
+                add_rewrite "$profile" "$domain" "$new_ip"
+                if [[ $? -ne 0 ]]; then
+                    red_log "[!] Error during IP change addition"
+                fi
+            done
+            
+            green_log "[✓] IP update completed for profile $profile"
+        fi
+    fi
+done
+
+# Now refresh the domain lists after IP changes
+echo "[+] Refreshing domain lists after IP changes..."
+
+# Clear and rebuild the domain maps
+profile_past_domains=()
+profile_domain_ids=()
+
+for profile in "${ids[@]}"; do
+    if [[ -z "${profile_fastest_ips[$profile]}" ]]; then
+        continue
+    fi
+    
+    rewrites_json=$(fetch_rewrites_from_profile "$profile")
+    if [[ $? -ne 0 ]]; then
+        continue
+    fi
+    
+    # Store domains with current fastest IP
+    while IFS=: read -r domain domain_id; do
+        if [[ -n "$domain" ]]; then
+            profile_past_domains["${profile}:${domain}"]="1"
+            profile_domain_ids["${profile}:${domain}"]="$domain_id"
+        fi
+    done <<< "$(extract_domains_with_ip "$rewrites_json" "${profile_fastest_ips[$profile]}")"
+done
+
+# Load current CF domains
+declare -A current_cf_domains
+if [[ -f ./storage/cf_domain.txt ]]; then
+    while IFS= read -r domain; do
+        if [[ -n "$domain" ]]; then
+            current_cf_domains["$domain"]="1"
+        fi
+    done < ./storage/cf_domain.txt
+fi
+
+# Process deletions domains (domains no longer using CF)
 echo "[+] Processing domain deletions..."
 
 declare -a domains_to_delete
@@ -349,7 +486,7 @@ else
     echo "[*] No domains to delete"
 fi
 
-# Process additions domains
+# Process additions domains (new CF domains)
 echo "[+] Processing domain additions..."
 
 declare -a domains_to_add
